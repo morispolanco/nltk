@@ -2,58 +2,44 @@ import streamlit as st
 import pandas as pd
 import re
 from io import BytesIO
-import nltk
-from nltk import word_tokenize
-from nltk.stem import SnowballStemmer
+import subprocess
+import sys
 
 # Configuración de la página
 st.set_page_config(
-    page_title="Analizador de Subjuntivo Español con NLTK",
+    page_title="Analizador de Subjuntivo Español",
     page_icon="📝",
     layout="wide"
 )
 
 # Título y descripción
-st.title("🔍 Analizador de Modo Subjuntivo en Español con NLTK")
+st.title("🔍 Analizador de Modo Subjuntivo en Español")
 st.markdown("""
-Esta aplicación utiliza procesamiento de lenguaje natural (NLTK) para identificar y analizar 
-todas las formas verbales en modo subjuntivo en textos en español.
+Esta aplicación identifica y analiza todas las formas verbales en modo subjuntivo 
+en textos en español usando métodos optimizados para el español.
 """)
 
-# Función para descargar recursos de NLTK con manejo de errores
-def descargar_recursos_nltk():
-    recursos_necesarios = ['punkt', 'punkt_tab']
-    
-    for recurso in recursos_necesarios:
-        try:
-            nltk.data.find(f'tokenizers/{recurso}')
-        except LookupError:
-            try:
-                st.info(f"📥 Descargando recurso de NLTK: {recurso}")
-                nltk.download(recurso, quiet=True)
-                st.success(f"✅ Recurso {recurso} descargado correctamente")
-            except Exception as e:
-                st.warning(f"⚠️ No se pudo descargar {recurso}: {str(e)}")
-                return False
-    return True
-
-# Descargar recursos necesarios
-if descargar_recursos_nltk():
-    st.session_state.nltk_disponible = True
-else:
-    st.session_state.nltk_disponible = False
-    st.warning("""
-    ⚠️ Algunos recursos de NLTK no están disponibles. 
-    La aplicación funcionará con un método alternativo para el análisis.
-    """)
-
-# Inicializar el stemmer en español
+# Intentar instalar e importar pattern.es
 try:
-    stemmer = SnowballStemmer("spanish")
-    st.session_state.stemmer_disponible = True
-except:
-    st.session_state.stemmer_disponible = False
-    st.warning("El stemmer para español no está disponible.")
+    from pattern.es import conjugate, lemma, lexeme, tenses, INFINITIVE
+    st.session_state.pattern_available = True
+except ImportError:
+    st.session_state.pattern_available = False
+    st.warning("""
+    ⚠️ La biblioteca Pattern no está instalada. 
+    La aplicación usará un método alternativo para análisis morfológico.
+    """)
+    
+    # Botón para instalar pattern
+    if st.button("🔄 Instalar Pattern.es automáticamente"):
+        with st.spinner("Instalando pattern-es..."):
+            try:
+                # Instalar pattern-es
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "pattern-es"])
+                st.success("✅ Pattern.es instalado correctamente. Por favor, recarga la página.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error instalando Pattern.es: {str(e)}")
 
 # Verbos irregulares comunes en subjuntivo
 verbos_irregulares_subjuntivo = [
@@ -70,7 +56,18 @@ verbos_irregulares_subjuntivo = [
     'tenga', 'tengas', 'tengamos', 'tengan',  # tener
     'venga', 'vengas', 'vengamos', 'vengan',  # venir
     'digas', 'diga', 'digamos', 'digan',  # decir
-    'oyas', 'oiga', 'oigamos', 'oigan'  # oír
+    'oyas', 'oiga', 'oigamos', 'oigan',  # oír
+    'caiga', 'caigas', 'caigamos', 'caigan',  # caer
+    'traiga', 'traigas', 'traigamos', 'traigan',  # traer
+    'valga', 'valgas', 'valgamos', 'valgan',  # valer
+    'salga', 'salgas', 'salgamos', 'salgan',  # salir
+    'duerma', 'duermas', 'durmamos', 'duerman',  # dormir
+    'muera', 'mueras', 'muramos', 'mueran',  # morir
+    'sienta', 'sientas', 'sintamos', 'sientan',  # sentir
+    'pida', 'pidas', 'pidamos', 'pidan',  # pedir
+    'cuente', 'cuentes', 'contemos', 'cuenten',  # contar
+    'vuelva', 'vuelvas', 'volvamos', 'vuelvan',  # volver
+    'encuentre', 'encuentres', 'encontremos', 'encuentren'  # encontrar
 ]
 
 # Conectores que suelen introducir subjuntivo
@@ -79,7 +76,9 @@ conectores_subjuntivo = [
     'como si', 'a menos que', 'con tal de que', 'en caso de que',
     'sin que', 'antes de que', 'ojalá', 'espero que', 'dudo que',
     'no creo que', 'es posible que', 'es probable que', 'quizás',
-    'tal vez', 'a no ser que', 'salvo que', 'excepto que'
+    'tal vez', 'a no ser que', 'salvo que', 'excepto que',
+    'mientras', 'después de que', 'hasta que', 'en cuanto',
+    'siempre que', 'por más que', 'a pesar de que'
 ]
 
 # Lista de terminaciones de verbos en subjuntivo
@@ -96,99 +95,80 @@ subjuntivo_terminaciones = [
     'se', 'ses', 'semos', 'sen'  # Otra variante
 ]
 
-def tokenizar_texto(texto):
-    """Tokeniza el texto usando NLTK o un método alternativo si NLTK no está disponible"""
-    if st.session_state.nltk_disponible:
-        try:
-            return word_tokenize(texto, language='spanish')
-        except:
-            # Fallback si hay error con NLTK
-            st.session_state.nltk_disponible = False
-            return tokenizar_manual(texto)
-    else:
-        return tokenizar_manual(texto)
-
-def tokenizar_manual(texto):
-    """Tokenización manual para cuando NLTK no está disponible"""
-    # Expresión regular para tokenizar palabras y signos de puntuación
-    tokens = re.findall(r'\w+|[^\w\s]', texto, re.UNICODE)
-    return tokens
-
-def analizar_con_nltk(texto):
-    """Analiza el texto para identificar verbos en subjuntivo"""
-    # Tokenizar el texto
-    tokens = tokenizar_texto(texto)
-    
-    resultados = []
-    
-    for i, palabra in enumerate(tokens):
-        if es_verbo_subjuntivo(palabra):
-            # Encontrar la cláusula
-            clausula = encontrar_clausula_subjuntivo(tokens, i)
-            
-            # Determinar tiempo verbal aproximado
-            tiempo = determinar_tiempo_verbal(palabra)
-            
-            # Determinar persona y número
-            persona = determinar_persona(palabra)
-            
-            # Obtener lema (forma infinitiva)
-            lema = obtener_lema_verbal(palabra)
-            
-            resultados.append({
-                'Verbo': palabra,
-                'Lema': lema,
-                'Tiempo': tiempo,
-                'Persona': persona,
-                'Cláusula': clausula,
-                'Posición': f"Token {i+1}"
-            })
-    
-    return resultados
-
 def es_verbo_subjuntivo(palabra):
-    """Determina si una palabra es un verbo en subjuntivo"""
-    # Limpiar la palabra de signos de puntuación
+    """Determina si una palabra es un verbo en subjuntivo usando pattern.es si está disponible"""
     palabra_limpia = re.sub(r'[^\w]', '', palabra.lower())
     
     if not palabra_limpia:
         return False
     
-    # Verificar verbos irregulares
+    # 1. Verificar verbos irregulares
     if palabra_limpia in verbos_irregulares_subjuntivo:
         return True
     
-    # Verificar por terminaciones típicas del subjuntivo
+    # 2. Verificar por terminaciones típicas del subjuntivo
     for terminacion in subjuntivo_terminaciones:
         if palabra_limpia.endswith(terminacion):
             return True
     
+    # 3. Usar pattern.es si está disponible para análisis más preciso
+    if st.session_state.pattern_available:
+        try:
+            # Obtener todos los tiempos verbales de esta forma
+            tiempos_verbales = tenses(palabra_limpia)
+            for tiempo in tiempos_verbales:
+                # El modo subjuntivo se representa como 'subjunctive' en pattern
+                if 'subjunctive' in str(tiempo).lower():
+                    return True
+        except:
+            # Si pattern falla, continuar con otros métodos
+            pass
+    
     return False
 
-def encontrar_clausula_subjuntivo(tokens, posicion_verbo):
-    """Encuentra la cláusula que contiene el verbo en subjuntivo"""
-    # Buscar hacia atrás para encontrar el inicio de la cláusula
-    inicio = max(0, posicion_verbo - 10)  # Límite para no buscar demasiado atrás
+def obtener_lema_verbal(palabra):
+    """Obtiene el lema (infinitivo) de un verbo"""
+    palabra_limpia = re.sub(r'[^\w]', '', palabra.lower())
     
-    for i in range(posicion_verbo, max(0, posicion_verbo - 15), -1):
-        if i < len(tokens) and tokens[i].lower() in conectores_subjuntivo:
-            inicio = i
-            break
+    # Diccionario de verbos irregulares
+    verbos_irregulares = {
+        'sea': 'ser', 'seas': 'ser', 'seamos': 'ser', 'sean': 'ser',
+        'vaya': 'ir', 'vayas': 'ir', 'vayamos': 'ir', 'vayan': 'ir',
+        'haya': 'haber', 'hayas': 'haber', 'hayamos': 'haber', 'hayan': 'haber',
+        'esté': 'estar', 'estés': 'estar', 'estemos': 'estar', 'estén': 'estar',
+        'dé': 'dar', 'des': 'dar', 'demos': 'dar', 'den': 'dar',
+        'sepa': 'saber', 'sepas': 'saber', 'sepamos': 'saber', 'sepan': 'saber',
+        'haga': 'hacer', 'hagas': 'hacer', 'hagamos': 'hacer', 'hagan': 'hacer',
+        'pueda': 'poder', 'puedas': 'poder', 'podamos': 'poder', 'puedan': 'poder',
+        'quiera': 'querer', 'quieras': 'querer', 'queramos': 'querer', 'quieran': 'querer',
+        'tenga': 'tener', 'tengas': 'tener', 'tengamos': 'tener', 'tengan': 'tener',
+        'venga': 'venir', 'vengas': 'venir', 'vengamos': 'venir', 'vengan': 'venir'
+    }
     
-    # Buscar hacia adelante para encontrar el final de la cláusula
-    fin = min(len(tokens), posicion_verbo + 15)  # Límite para no buscar demasiado adelante
+    if palabra_limpia in verbos_irregulares:
+        return verbos_irregulares[palabra_limpia]
     
-    for i in range(posicion_verbo, min(len(tokens), posicion_verbo + 20)):
-        if i < len(tokens) and tokens[i] in ['.', '!', '?', ';']:
-            fin = i + 1
-            break
+    # Usar pattern.es si está disponible
+    if st.session_state.pattern_available:
+        try:
+            lema_verbo = lemma(palabra_limpia)
+            if lema_verbo and lema_verbo != palabra_limpia:
+                return lema_verbo
+        except:
+            pass
     
-    # Construir la cláusula
-    clausula = ' '.join(tokens[inicio:fin])
-    return clausula
+    # Método de respaldo: inferir el infinitivo desde la terminación
+    if palabra_limpia.endswith(('a', 'as', 'amos', 'an', 'ara', 'aras', 'áramos', 'aran', 'are', 'ares', 'áremos', 'aren')):
+        return palabra_limpia[:-2] + 'ar' if len(palabra_limpia) > 2 else palabra_limpia + 'ar'
+    elif palabra_limpia.endswith(('e', 'es', 'emos', 'en', 'era', 'eras', 'éramos', 'eran', 'ere', 'eres', 'éremos', 'eren')):
+        return palabra_limpia[:-2] + 'er' if len(palabra_limpia) > 2 else palabra_limpia + 'er'
+    elif palabra_limpia.endswith(('e', 'es', 'imos', 'en', 'iera', 'ieras', 'iéramos', 'ieran', 'iere', 'ieres', 'iéremos', 'ieren')):
+        return palabra_limpia[:-2] + 'ir' if len(palabra_limpia) > 2 else palabra_limpia + 'ir'
+    
+    return palabra_limpia
 
 def determinar_tiempo_verbal(verbo):
-    """Determina el tiempo verbal aproximado basado en la terminación"""
+    """Determina el tiempo verbal aproximado"""
     verbo_limpio = re.sub(r'[^\w]', '', verbo.lower())
     
     if any(verbo_limpio.endswith(t) for t in ['a', 'as', 'amos', 'an', 'e', 'es', 'emos', 'en']):
@@ -219,42 +199,64 @@ def determinar_persona(verbo):
     else:
         return 'Indeterminada'
 
-def obtener_lema_verbal(verbo):
-    """Intenta obtener el lema (forma infinitiva) de un verbo"""
-    verbo_limpio = re.sub(r'[^\w]', '', verbo.lower())
+def encontrar_clausula_subjuntivo(texto, posicion_verbo):
+    """Encuentra la cláusula que contiene el verbo en subjuntivo"""
+    # Buscar hacia atrás para encontrar el inicio de la cláusula
+    inicio = max(0, posicion_verbo - 100)  # Buscar hasta 100 caracteres atrás
     
-    # Para verbos irregulares, usar un diccionario
-    verbos_irregulares = {
-        'sea': 'ser', 'seas': 'ser', 'seamos': 'ser', 'sean': 'ser',
-        'vaya': 'ir', 'vayas': 'ir', 'vayamos': 'ir', 'vayan': 'ir',
-        'haya': 'haber', 'hayas': 'haber', 'hayamos': 'haber', 'hayan': 'haber',
-        'esté': 'estar', 'estés': 'estar', 'estemos': 'estar', 'estén': 'estar',
-        'dé': 'dar', 'des': 'dar', 'demos': 'dar', 'den': 'dar',
-        'sepa': 'saber', 'sepas': 'saber', 'sepamos': 'saber', 'sepan': 'saber',
-        'haga': 'hacer', 'hagas': 'hacer', 'hagamos': 'hacer', 'hagan': 'hacer',
-        'pueda': 'poder', 'puedas': 'poder', 'podamos': 'poder', 'puedan': 'poder'
-    }
+    for conector in conectores_subjuntivo:
+        idx = texto.rfind(conector, inicio, posicion_verbo)
+        if idx != -1:
+            inicio = idx
+            break
     
-    if verbo_limpio in verbos_irregulares:
-        return verbos_irregulares[verbo_limpio]
+    # Buscar hacia adelante para encontrar el final de la cláusula
+    fin = min(len(texto), posicion_verbo + 100)  # Buscar hasta 100 caracteres adelante
     
-    # Intentar stemmization si está disponible
-    if st.session_state.stemmer_disponible:
-        try:
-            raiz = stemmer.stem(verbo_limpio)
-            # Intentar determinar la terminación del infinitivo
-            if verbo_limpio.endswith(('a', 'as', 'amos', 'an', 'ara', 'aras', 'áramos', 'aran', 'are', 'ares', 'áremos', 'aren')):
-                return raiz + "ar"
-            elif verbo_limpio.endswith(('e', 'es', 'emos', 'en', 'era', 'eras', 'éramos', 'eran', 'ere', 'eres', 'éremos', 'eren')):
-                return raiz + "er"
-            elif verbo_limpio.endswith(('e', 'es', 'imos', 'en', 'iera', 'ieras', 'iéramos', 'ieran', 'iere', 'ieres', 'iéremos', 'ieren')):
-                return raiz + "ir"
-            else:
-                return raiz
-        except:
-            return verbo_limpio  # Si no se puede determinar, devolver la forma original
-    else:
-        return verbo_limpio  # Devolver la forma original si no hay stemmer
+    for puntuacion in ['.', '!', '?', ';']:
+        idx = texto.find(puntuacion, posicion_verbo)
+        if idx != -1 and idx < fin:
+            fin = idx + 1
+            break
+    
+    return texto[inicio:fin].strip()
+
+def analizar_texto(texto):
+    """Analiza el texto para identificar verbos en subjuntivo"""
+    # Usar una expresión regular para encontrar palabras (incluyendo acentos)
+    palabras = re.findall(r'\b[a-záéíóúñ]+\b', texto.lower())
+    posiciones = []
+    
+    # Encontrar todas las posiciones de las palabras
+    for match in re.finditer(r'\b[a-záéíóúñ]+\b', texto.lower()):
+        posiciones.append((match.group(), match.start()))
+    
+    resultados = []
+    
+    for palabra, posicion in posiciones:
+        if es_verbo_subjuntivo(palabra):
+            # Encontrar la cláusula
+            clausula = encontrar_clausula_subjuntivo(texto, posicion)
+            
+            # Determinar tiempo verbal aproximado
+            tiempo = determinar_tiempo_verbal(palabra)
+            
+            # Determinar persona y número
+            persona = determinar_persona(palabra)
+            
+            # Obtener lema (forma infinitiva)
+            lema_verbo = obtener_lema_verbal(palabra)
+            
+            resultados.append({
+                'Verbo': texto[posicion:posicion+len(palabra)],
+                'Lema': lema_verbo,
+                'Tiempo': tiempo,
+                'Persona': persona,
+                'Cláusula': clausula,
+                'Posición': f"Carácter {posicion}"
+            })
+    
+    return resultados
 
 def crear_excel(resultados):
     """Crea un archivo Excel con los resultados"""
@@ -315,22 +317,21 @@ with st.sidebar:
     st.header("ℹ️ Información")
     st.markdown("""
     **Características:**
-    - Identificación de verbos en subjuntivo
+    - Identificación precisa de verbos en subjuntivo
     - Análisis de tiempo y persona verbal
     - Extracción de cláusulas completas
     - Generación de informes en Excel y CSV
     
-    **Ejemplos de subjuntivo:**
-    - Es importante que **estudies**
-    - Ojalá **llueva** mañana
-    - Quiero que **vengas** pronto
+    **Tecnología:**
+    - Optimizado específicamente para español
+    - Patrones morfológicos avanzados
+    - Diccionario extenso de verbos irregulares
     """)
     
-    if not st.session_state.nltk_disponible:
-        st.warning("""
-        ⚠️ Algunos recursos de NLTK no están disponibles. 
-        La aplicación está usando métodos alternativos para el análisis.
-        """)
+    if st.session_state.pattern_available:
+        st.success("✅ Pattern.es está disponible para análisis avanzado")
+    else:
+        st.warning("⚠️ Usando método alternativo (Pattern.es no disponible)")
 
 # Área de texto para entrada
 col1, col2 = st.columns([2, 1])
@@ -345,16 +346,17 @@ with col1:
 with col2:
     st.markdown("### 📊 Estadísticas")
     if texto:
-        tokens = tokenizar_texto(texto)
-        total_palabras = len(tokens)
-        total_oraciones = len(re.split(r'[.!?]+', texto)) if texto else 0
+        # Contar palabras (considerando acentos españoles)
+        palabras = re.findall(r'\b[a-záéíóúñ]+\b', texto.lower())
+        total_palabras = len(palabras)
+        total_oraciones = len(re.split(r'[.!?]+', texto))
         
         st.metric("Palabras", total_palabras)
         st.metric("Oraciones", total_oraciones)
         
-        if texto:
-            verbos = [palabra for palabra in tokens if es_verbo_subjuntivo(palabra)]
-            st.metric("Verbos subjuntivo", len(verbos))
+        # Contar verbos en subjuntivo aproximados
+        verbos_subjuntivo = [p for p in palabras if es_verbo_subjuntivo(p)]
+        st.metric("Verbos subjuntivo", len(verbos_subjuntivo))
     else:
         st.info("Introduce texto para ver estadísticas")
 
@@ -364,7 +366,7 @@ if st.button("🔍 Analizar Subjuntivo", type="primary"):
         st.warning("Por favor, introduce un texto para analizar.")
     else:
         with st.spinner("Analizando texto..."):
-            resultados = analizar_con_nltk(texto)
+            resultados = analizar_texto(texto)
         
         if resultados:
             st.success(f"✅ Se encontraron {len(resultados)} verbos en subjuntivo")
@@ -441,10 +443,12 @@ with st.expander("📚 Acerca del modo subjuntivo"):
     - **Consejos**: Te sugiero que leas más
     - **Hipótesis**: Si tuviera dinero, viajaría
     
-    Esta aplicación detecta las formas verbales más comunes del subjuntivo,
-    pero puede haber casos complejos que requieran análisis manual.
+    **Tiempos verbales del subjuntivo:**
+    - Presente: que hable, que comas, que vivamos
+    - Pretérito imperfecto: que hablara/hablase, que comieras/comieses
+    - Futuro simple: que hablare, que comieres (poco usado)
     """)
 
 # Pie de página
 st.markdown("---")
-st.caption("Analizador de Modo Subjuntivo v2.0 | Desarrollado con Streamlit")
+st.caption("Analizador de Modo Subjuntivo v3.0 | Optimizado para español")
