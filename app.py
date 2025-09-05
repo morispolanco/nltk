@@ -1,390 +1,467 @@
 import streamlit as st
-import re
-import nltk
 import pandas as pd
-from nltk.tokenize import word_tokenize, sent_tokenize
-from nltk.tag import pos_tag
-from collections import defaultdict
-import plotly.express as px
+import re
+from io import BytesIO
+import nltk
+from nltk import word_tokenize, pos_tag
+from nltk.corpus import cess_esp
+from nltk.stem import SnowballStemmer
 
-# 👇 SOLUCIÓN PARA EL ERROR punkt_tab (Descarga automática de recursos)
-@st.cache_resource
-def download_nltk_resources():
-    """Descarga todos los recursos NLTK necesarios para el español"""
-    resources = {
-        'tokenizers/punkt': 'punkt',
-        'tokenizers/punkt_tab': 'punkt_tab',  # Recurso faltante
-        'taggers/averaged_perceptron_tagger': 'averaged_perceptron_tagger'
-    }
-    
-    for path, package in resources.items():
-        try:
-            nltk.data.find(path)
-        except LookupError:
-            nltk.download(package, quiet=True)
-    
-    # Recursos específicos para español
-    try:
-        nltk.data.find('tokenizers/punkt/spanish.pickle')
-    except LookupError:
-        nltk.download('punkt', quiet=True)
-    
-    return True
+# Descargar recursos necesarios de NLTK
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
 
-# Ejecutar la descarga al inicio
-download_nltk_resources()
+try:
+    nltk.data.find('corpora/cess_esp')
+except LookupError:
+    nltk.download('cess_esp')
 
-# Diccionario base de formas subjuntivas comunes
-subjunctive_forms = {
-    'presente': {
-        'ar': [r'[aei]ría\w*', r'[aei]ré\w*', r'[aei]rí\w*'],
-        'er': [r'[aei]ríe\w*', r'[aei]ré\w*', r'[aei]rí\w*'],
-        'ir': [r'[aei]rí\w*', r'[aei]ré\w*', r'[aei]rí\w*']
-    },
-    'imperfecto': {
-        '1ra': [r'[aei]r[aá]ra\w*', r'[aei]rí\w*'],
-        '2da': [r'[aei]r[eé]se\w*', r'[aei]rí\w*']
-    },
-    'pluscuamperfecto': [r'hubier[ea]\w*', r'hici[ea]\w*']
-}
+try:
+    nltk.data.find('taggers/cess_esp')
+except LookupError:
+    nltk.download('cess_esp_udep')
 
-subjunctive_triggers = [
-    'ojalá', 'espero que', 'quizás', 'quizá', 'tal vez', 'aunque', 'a pesar de que',
-    'para que', 'sin que', 'antes de que', 'mientras', 'como si', 'como',
-    'si', 'en caso de que', 'cuando', 'donde', 'cual', 'cuyo', 'cuyos', 'cuya', 'cuyas',
-    'que', 'no creo que', 'me parece que', 'creo que', 'pienso que', 'dudo que'
-]
-
-def detect_subjunctive(text):
-    """Detecta verbos en subjuntivo en un texto en español"""
-    text = text.lower()
-    
-    # Tokenización con manejo de errores
-    try:
-        sentences = sent_tokenize(text, language='spanish')
-    except:
-        # Fallback: usar tokenización genérica si falla la del español
-        sentences = sent_tokenize(text)
-    
-    results = {
-        'subjunctive_verbs': [],
-        'contexts': defaultdict(list),
-        'summary': {}
-    }
-    
-    for sent in sentences:
-        try:
-            tokens = word_tokenize(sent, language='spanish')
-            pos_tags = pos_tag(tokens)  # Usa el tagger en inglés (requiere _eng)
-        except:
-            # Fallback si falla la tokenización
-            tokens = word_tokenize(sent)
-            pos_tags = pos_tag(tokens)
-        
-        # ... (resto de la función permanece igual)
-
-        
-        trigger_found = any(trigger in sent for trigger in subjunctive_triggers)
-        
-        for i, (word, tag) in enumerate(pos_tags):
-            if tag.startswith('V'):
-                analysis = analyze_verb(word, sent, trigger_found)
-                if analysis['is_subjunctive']:
-                    verb_data = {
-                        'verbo': word,
-                        'forma': analysis['form'],
-                        'tiempo': analysis['tense'].capitalize(),
-                        'persona': analysis['person'],
-                        'numero': analysis['number'],
-                        'oracion': sent,
-                        'posicion': i
-                    }
-                    
-                    results['subjunctive_verbs'].append(verb_data)
-                    results['contexts'][verb_data['tiempo']].append(verb_data)
-    
-    results['summary'] = generate_summary(results)
-    return results
-
-def analyze_verb(verb, sentence, trigger_found):
-    """Analiza un verbo individual para determinar si está en subjuntivo"""
-    analysis = {
-        'is_subjunctive': False,
-        'form': None,
-        'tense': None,
-        'person': None,
-        'number': None
-    }
-    
-    # 1. Verificación directa con patrones
-    for tense, forms in subjunctive_forms.items():
-        if tense == 'presente':
-            for ending, patterns in forms.items():
-                for pattern in patterns:
-                    if re.search(pattern, verb):
-                        analysis['is_subjunctive'] = True
-                        analysis['tense'] = 'presente'
-                        analysis['form'] = 'subjuntivo'
-                        analysis['person'] = get_person(verb, tense)
-                        analysis['number'] = get_number(verb, tense)
-                        return analysis
-        elif tense == 'imperfecto':
-            for form_name, patterns in forms.items():
-                for pattern in patterns:
-                    if re.search(pattern, verb):
-                        analysis['is_subjunctive'] = True
-                        analysis['tense'] = 'imperfecto'
-                        analysis['form'] = f'subjuntivo_{form_name}'
-                        analysis['person'] = get_person(verb, tense)
-                        analysis['number'] = get_number(verb, tense)
-                        return analysis
-        elif tense == 'pluscuamperfecto':
-            for pattern in forms:
-                if re.search(pattern, verb):
-                    analysis['is_subjunctive'] = True
-                    analysis['tense'] = 'pluscuamperfecto'
-                    analysis['form'] = 'subjuntivo'
-                    analysis['person'] = '3a'
-                    analysis['number'] = 'singular'
-                    return analysis
-    
-    # 2. Heurísticas contextuales (si hay un trigger de subjuntivo)
-    if trigger_found:
-        subjunctive_endings = [
-            r'r[aeí]a\w*',  # -ra, -re, -ría
-            r'r[aeí]e\w*',  # -se, -re, -ríe
-            r'rí\w*',      # -rí, -rías, etc.
-            r'ría\w*'      # -ría, -rías, etc.
-        ]
-        
-        for ending in subjunctive_endings:
-            if re.search(ending, verb):
-                # Verificar que no sea un verbo impersonal o con sentido diferente
-                if not re.match(r'.*ría$', verb) or 'querría' not in sentence:
-                    analysis['is_subjunctive'] = True
-                    analysis['tense'] = 'presente' if 'ría' in verb else 'imperfecto'
-                    analysis['form'] = 'subjuntivo'
-                    analysis['person'] = get_person(verb, 'contextual')
-                    analysis['number'] = get_number(verb, 'contextual')
-                    return analysis
-    
-    return analysis
-
-def get_person(verb, tense):
-    """Determina la persona gramatical del verbo"""
-    if tense == 'presente':
-        if verb.endswith(('e', 'es', 'é', 'és')):
-            return '3a' if verb.endswith('e') else '2a'
-        elif verb.endswith(('a', 'as', 'á', 'ás')):
-            return '3a' if verb.endswith('a') else '2a'
-        elif verb.endswith(('emos', 'éis', 'en')):
-            return '1a' if 'emos' in verb else '2a' if 'éis' in verb else '3a'
-    elif tense == 'imperfecto':
-        if verb.endswith(('ra', 'ras', 'ramos', 'rais', 'ran')):
-            return '3a' if verb.endswith(('ra', 'ran')) else '2a' if verb.endswith(('ras', 'rais')) else '1a'
-        elif verb.endswith(('se', 'ses', 'semos', 'seis', 'sen')):
-            return '3a' if verb.endswith(('se', 'sen')) else '2a' if verb.endswith(('ses', 'seis')) else '1a'
-    elif tense == 'pluscuamperfecto':
-        return '3a'
-    return 'indeterminada'
-
-def get_number(verb, tense):
-    """Determina el número (singular/plural) del verbo"""
-    if tense == 'presente':
-        if verb.endswith(('e', 'a', 'é', 'á')):
-            return 'singular'
-        elif verb.endswith(('en', 'es', 'as', 'éis', 'emos')):
-            return 'plural'
-    elif tense == 'imperfecto':
-        if verb.endswith(('ra', 'se', 'ras', 'ses')):
-            return 'singular' if verb.endswith(('ra', 'se')) else 'plural'
-        elif verb.endswith(('ramos', 'rais', 'ran', 'semos', 'seis', 'sen')):
-            return 'plural'
-    return 'singular'
-
-def generate_summary(results):
-    """Genera un resumen de los hallazgos"""
-    summary = {
-        'total_verbs': len(results['subjunctive_verbs']),
-        'tenses': {},
-        'most_common': []
-    }
-    
-    # Contar por tiempos verbales
-    tense_count = defaultdict(int)
-    for verb in results['subjunctive_verbs']:
-        tense = verb['tiempo']
-        tense_count[tense] += 1
-    
-    for tense, count in tense_count.items():
-        summary['tenses'][tense] = count
-    
-    # Verbos más comunes
-    verb_freq = defaultdict(int)
-    for verb in results['subjunctive_verbs']:
-        verb_freq[verb['verbo']] += 1
-    
-    summary['most_common'] = sorted(verb_freq.items(), key=lambda x: x[1], reverse=True)[:10]
-    
-    return summary
-
-# ———————————————————————————————————————
-# INTERFAZ DE USUARIO STREAMLIT
-# ———————————————————————————————————————
-
+# Configuración de la página
 st.set_page_config(
-    page_title="Detector de Subjuntivo",
-    page_icon="🔍",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="Analizador de Subjuntivo Español con NLTK",
+    page_icon="📝",
+    layout="wide"
 )
 
-st.title("🔍 Detector de Subjuntivo en Español")
-st.markdown("**Analiza automáticamente verbos en modo subjuntivo en textos en español**")
+# Título y descripción
+st.title("🔍 Analizador de Modo Subjuntivo en Español con NLTK")
+st.markdown("""
+Esta aplicación utiliza procesamiento de lenguaje natural (NLTK) para identificar y analizar 
+todas las formas verbales en modo subjuntivo en textos en español.
+""")
 
-# SIDEBAR
+# Inicializar el stemmer en español
+stemmer = SnowballStemmer("spanish")
+
+# Cargar el tagset de cess_esp para español
+try:
+    # Obtener el tagged corpus
+    tagged_sents = cess_esp.tagged_sents()
+    st.session_state.corpus_cargado = True
+except:
+    st.session_state.corpus_cargado = False
+    st.warning("El corpus CESS_ESP no está disponible. Algunas funciones avanzadas estarán limitadas.")
+
+# Diccionario de etiquetas POS (Part-of-Speech) para español
+POS_TAGS = {
+    'ao': 'Adjetivo ordinal',
+    'aq': 'Adjetivo calificativo',
+    'cc': 'Conjunción coordinada',
+    'cs': 'Conjunción subordinada',
+    'da': 'Determinante artículo',
+    'dd': 'Determinante demostrativo',
+    'de': 'Determinante exclamativo',
+    'di': 'Determinante indefinido',
+    'dn': 'Determinante numeral',
+    'do': 'Determinante posesivo',
+    'dt': 'Determinante interrogativo',
+    'f': 'Puntuación',
+    'i': 'Interjección',
+    'nc': 'Nombre común',
+    'np': 'Nombre propio',
+    'p': 'Preposición',
+    'pd': 'Pronombre demostrativo',
+    'pe': 'Pronombre exclamativo',
+    'pi': 'Pronombre indefinido',
+    'pn': 'Pronombre numeral',
+    'pp': 'Pronombre personal',
+    'pr': 'Pronombre relativo',
+    'pt': 'Pronombre interrogativo',
+    'px': 'Pronombre posesivo',
+    'rg': 'Adverbio general',
+    'rn': 'Adverbio de negación',
+    'sp': 'Adposición',
+    'va': 'Verbo auxiliar',
+    'vm': 'Verbo principal',
+    'vs': 'Verbo semiauxiliar',
+    'w': 'Fecha',
+    'z': 'Numeral',
+    'zm': 'Numeral monetario'
+}
+
+# Verbos irregulares comunes en subjuntivo
+verbos_irregulares_subjuntivo = [
+    'sea', 'seas', 'seamos', 'sean',  # ser
+    'vaya', 'vayas', 'vayamos', 'vayan',  # ir
+    'haya', 'hayas', 'hayamos', 'hayan',  # haber
+    'esté', 'estés', 'estemos', 'estén',  # estar
+    'dé', 'des', 'demos', 'den',  # dar
+    'sepa', 'sepas', 'sepamos', 'sepan',  # saber
+    'quepa', 'quepas', 'quepamos', 'quepan',  # caber
+    'haga', 'hagas', 'hagamos', 'hagan',  # hacer
+    'pueda', 'puedas', 'podamos', 'puedan',  # poder
+    'quiera', 'quieras', 'queramos', 'quieran',  # querer
+    'tenga', 'tengas', 'tengamos', 'tengan',  # tener
+    'venga', 'vengas', 'vengamos', 'vengan',  # venir
+    'digas', 'diga', 'digamos', 'digan',  # decir
+    'oyas', 'oiga', 'oigamos', 'oigan'  # oír
+]
+
+# Conectores que suelen introducir subjuntivo
+conectores_subjuntivo = [
+    'que', 'cuando', 'si', 'aunque', 'para que', 'a fin de que', 
+    'como si', 'a menos que', 'con tal de que', 'en caso de que',
+    'sin que', 'antes de que', 'ojalá', 'espero que', 'dudo que',
+    'no creo que', 'es posible que', 'es probable que', 'quizás',
+    'tal vez', 'a no ser que', 'salvo que', 'excepto que'
+]
+
+def analizar_con_nltk(texto):
+    """Analiza el texto usando NLTK para identificar verbos en subjuntivo"""
+    # Tokenizar y etiquetar
+    tokens = word_tokenize(texto, language='spanish')
+    tagged = pos_tag(tokens)
+    
+    resultados = []
+    
+    for i, (palabra, tag) in enumerate(tagged):
+        if es_verbo_subjuntivo(palabra, tag):
+            # Encontrar la cláusula
+            clausula = encontrar_clausula_subjuntivo(tokens, i)
+            
+            # Determinar tiempo verbal aproximado
+            tiempo = determinar_tiempo_verbal(palabra)
+            
+            # Determinar persona y número
+            persona = determinar_persona(palabra)
+            
+            # Obtener lema (forma infinitiva)
+            lema = obtener_lema_verbal(palabra)
+            
+            resultados.append({
+                'Verbo': palabra,
+                'Lema': lema,
+                'Etiqueta': tag,
+                'Tiempo': tiempo,
+                'Persona': persona,
+                'Cláusula': clausula,
+                'Posición': f"Token {i+1}"
+            })
+    
+    return resultados
+
+def es_verbo_subjuntivo(palabra, tag):
+    """Determina si una palabra es un verbo en subjuntivo basado en etiquetas POS y formas verbales"""
+    # Verificar si es verbo según la etiqueta POS
+    if not tag.startswith('v'):
+        return False
+    
+    palabra = palabra.lower()
+    
+    # Verificar verbos irregulares
+    if palabra in verbos_irregulares_subjuntivo:
+        return True
+    
+    # Verificar por terminaciones típicas del subjuntivo
+    terminaciones_subjuntivo = [
+        'ara', 'aras', 'áramos', 'aran',  # Pretérito imperfecto (-ar)
+        'are', 'ares', 'áremos', 'aren',  # Futuro simple (-ar)
+        'iera', 'ieras', 'iéramos', 'ieran',  # Pretérito imperfecto (-er/-ir)
+        'iere', 'ieres', 'iéremos', 'ieren',  # Futuro simple (-er/-ir)
+        'era', 'eras', 'éramos', 'eran',  # Variante (-er)
+        'ese', 'eses', 'ésemos', 'esen',  # Pretérito imperfecto (variante)
+        'a', 'as', 'amos', 'an',  # Presente (-ar)
+        'e', 'es', 'emos', 'en',  # Presente (-er)
+        'a', 'as', 'amos', 'an',  # Presente (-ir)
+        'se', 'ses', 'semos', 'sen'  # Otra variante
+    ]
+    
+    for terminacion in terminaciones_subjuntivo:
+        if palabra.endswith(terminacion):
+            return True
+    
+    return False
+
+def encontrar_clausula_subjuntivo(tokens, posicion_verbo):
+    """Encuentra la cláusula que contiene el verbo en subjuntivo"""
+    # Buscar hacia atrás para encontrar el inicio de la cláusula
+    inicio = 0
+    for i in range(posicion_verbo, 0, -1):
+        if tokens[i].lower() in conectores_subjuntivo:
+            inicio = i
+            break
+    
+    # Buscar hacia adelante para encontrar el final de la cláusula
+    fin = len(tokens)
+    for i in range(posicion_verbo, len(tokens)):
+        if tokens[i] in ['.', '!', '?', ';']:
+            fin = i + 1
+            break
+    
+    # Construir la cláusula
+    clausula = ' '.join(tokens[inicio:fin])
+    return clausula
+
+def determinar_tiempo_verbal(verbo):
+    """Determina el tiempo verbal aproximado basado en la terminación"""
+    verbo = verbo.lower()
+    
+    if any(verbo.endswith(t) for t in ['a', 'as', 'amos', 'an', 'e', 'es', 'emos', 'en']):
+        return 'Presente'
+    elif any(verbo.endswith(t) for t in ['ara', 'aras', 'áramos', 'aran', 'iera', 'ieras', 'iéramos', 'ieran', 'era', 'eras', 'éramos', 'eran', 'ese', 'eses', 'ésemos', 'esen']):
+        return 'Pretérito imperfecto'
+    elif any(verbo.endswith(t) for t in ['are', 'ares', 'áremos', 'aren', 'iere', 'ieres', 'iéremos', 'ieren']):
+        return 'Futuro simple'
+    else:
+        return 'Indeterminado'
+
+def determinar_persona(verbo):
+    """Determina la persona y número del verbo"""
+    verbo = verbo.lower()
+    
+    if verbo.endswith(('o', 'a', 'e')):  # 1ra singular
+        return '1ra persona singular'
+    elif verbo.endswith(('as', 'es')):  # 2da singular
+        return '2da persona singular'
+    elif verbo.endswith(('a', 'e')):  # 3ra singular
+        return '3ra persona singular'
+    elif verbo.endswith(('amos', 'emos', 'imos')):  # 1ra plural
+        return '1ra persona plural'
+    elif verbo.endswith(('áis', 'éis', 'ís')):  # 2da plural
+        return '2da persona plural'
+    elif verbo.endswith(('an', 'en')):  # 3ra plural
+        return '3ra persona plural'
+    else:
+        return 'Indeterminada'
+
+def obtener_lema_verbal(verbo):
+    """Intenta obtener el lema (forma infinitiva) de un verbo"""
+    verbo = verbo.lower()
+    
+    # Mapeo de terminaciones a infinitivos
+    terminaciones_a_infinitivo = {
+        'o': 'ar', 'as': 'ar', 'a': 'ar', 'amos': 'ar', 'an': 'ar',
+        'o': 'er', 'es': 'er', 'e': 'er', 'emos': 'er', 'en': 'er',
+        'o': 'ir', 'es': 'ir', 'e': 'ir', 'imos': 'ir', 'en': 'ir',
+        'é': 'ar', 'aste': 'ar', 'ó': 'ar', 'amos': 'ar', 'aron': 'ar',
+        'í': 'er', 'iste': 'er', 'ió': 'er', 'imos': 'er', 'ieron': 'er',
+        'í': 'ir', 'iste': 'ir', 'ió': 'ir', 'imos': 'ir', 'ieron': 'ir'
+    }
+    
+    # Para verbos irregulares, usar un diccionario
+    verbos_irregulares = {
+        'sea': 'ser', 'seas': 'ser', 'seamos': 'ser', 'sean': 'ser',
+        'vaya': 'ir', 'vayas': 'ir', 'vayamos': 'ir', 'vayan': 'ir',
+        'haya': 'haber', 'hayas': 'haber', 'hayamos': 'haber', 'hayan': 'haber',
+        'esté': 'estar', 'estés': 'estar', 'estemos': 'estar', 'estén': 'estar',
+        'dé': 'dar', 'des': 'dar', 'demos': 'dar', 'den': 'dar',
+        'sepa': 'saber', 'sepas': 'saber', 'sepamos': 'saber', 'sepan': 'saber'
+    }
+    
+    if verbo in verbos_irregulares:
+        return verbos_irregulares[verbo]
+    
+    # Intentar stemmization
+    try:
+        return stemmer.stem(verbo) + "ar"  # Aproximación
+    except:
+        return verbo  # Si no se puede determinar, devolver la forma original
+
+def crear_excel(resultados):
+    """Crea un archivo Excel con los resultados"""
+    if not resultados:
+        return None
+    
+    df = pd.DataFrame(resultados)
+    
+    # Crear el archivo Excel en memoria
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name='Subjuntivos', index=False)
+        
+        # Obtener el libro y la hoja de trabajo para aplicar formato
+        workbook = writer.book
+        worksheet = writer.sheets['Subjuntivos']
+        
+        # Formato para los encabezados
+        header_format = workbook.add_format({
+            'bold': True,
+            'text_wrap': True,
+            'valign': 'top',
+            'fg_color': '#366092',
+            'font_color': 'white',
+            'border': 1
+        })
+        
+        # Aplicar formato a los encabezados
+        for col_num, value in enumerate(df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
+        
+        # Ajustar el ancho de las columnas
+        for i, col in enumerate(df.columns):
+            max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+            worksheet.set_column(i, i, max_len)
+    
+    output.seek(0)
+    return output
+
+def crear_csv(resultados):
+    """Crea un archivo CSV con los resultados"""
+    if not resultados:
+        return None
+    
+    df = pd.DataFrame(resultados)
+    
+    # Crear el archivo CSV en memoria
+    output = BytesIO()
+    
+    # Escribir el CSV con codificación UTF-8 para caracteres especiales
+    output.write(df.to_csv(index=False, encoding='utf-8').encode('utf-8'))
+    
+    output.seek(0)
+    return output
+
+# Sidebar con información
 with st.sidebar:
-    st.header("Acerca de")
+    st.header("ℹ️ Información")
     st.markdown("""
-    Esta aplicación utiliza procesamiento de lenguaje natural para:
+    **Características con NLTK:**
+    - Tokenización y etiquetado POS en español
+    - Identificación precisa de verbos
+    - Análisis morfológico avanzado
+    - Detección de lemas verbales
     
-    - ✅ Detectar verbos en subjuntivo (presente, imperfecto, pluscuamperfecto)
-    - ✅ Identificar contextos que requieren subjuntivo
-    - ✅ Mostrar análisis morfológico (persona, número, tiempo)
-    - ✅ Proporcionar estadísticas de uso
-    
-    *Ideal para estudiantes de español y corrección de textos.*
+    **Ejemplos de subjuntivo:**
+    - Es importante que **estudies**
+    - Ojalá **llueva** mañana
+    - Quiero que **vengas** pronto
     """)
     
-    st.markdown("---")
-    st.markdown("**Ejemplos de uso**")
-    example_text = "Ojalá llueva mañana. Espero que tengas un buen día. Aunque esté cansado, iré al trabajo. No creo que haya suficiente tiempo para terminar."
-    if st.button("Cargar ejemplo"):
-        st.session_state.text_input = example_text
-    
-    # Botón de reinicio de recursos (opcional)
-    st.markdown("---")
-    if st.button("🔄 Reiniciar recursos de idioma"):
-        with st.spinner("Reinstalando recursos NLTK..."):
-            try:
-                nltk.download('punkt', quiet=False)
-                nltk.download('punkt_tab', quiet=False)
-                nltk.download('averaged_perceptron_tagger', quiet=False)
-                st.session_state.clear()
-                st.success("Recursos reinstalados. Recarga la página.")
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
+    if not st.session_state.corpus_cargado:
+        st.warning("""
+        ⚠️ El corpus CESS_ESP no está disponible completamente. 
+        Algunas funciones avanzadas de NLTK podrían estar limitadas.
+        """)
 
-# ÁREA PRINCIPAL
+# Área de texto para entrada
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    text = st.text_area(
-        "Introduce tu texto en español:",
-        value=st.session_state.get('text_input', ''),
+    texto = st.text_area(
+        "Introduce el texto a analizar:",
         height=300,
-        placeholder="Pega aquí tu texto para analizar..."
+        placeholder="Ejemplo: Es necesario que estudies más para el examen. Ojalá que tengas suerte en tu viaje..."
     )
-    
-    analyze_button = st.button("🔍 Analizar Texto", type="primary")
 
 with col2:
-    st.markdown("### 📊 Resumen Rápido")
-    if 'results' in st.session_state:
-        results = st.session_state.results
-        summary = results['summary']
+    st.markdown("### 📊 Estadísticas")
+    if texto:
+        tokens = word_tokenize(texto, language='spanish') if texto else []
+        total_palabras = len(tokens)
+        total_oraciones = len(re.split(r'[.!?]+', texto)) if texto else 0
         
-        total = summary['total_verbs']
-        st.metric("Verbos en subjuntivo", total, 
-                 delta="✅ Correcto" if total > 0 else "❌ Ninguno", 
-                 delta_color="normal")
+        st.metric("Palabras", total_palabras)
+        st.metric("Oraciones", total_oraciones)
         
-        if total > 0:
-            tenses = summary['tenses']
-            for tense, count in tenses.items():
-                st.metric(tense, count)
+        if texto:
+            tagged = pos_tag(tokens)
+            verbos = [word for word, tag in tagged if tag.startswith('v')]
+            st.metric("Verbos totales", len(verbos))
     else:
-        st.info("El análisis aparecerá aquí")
+        st.info("Introduce texto para ver estadísticas")
 
-# PROCESAMIENTO DEL TEXTO
-if analyze_button and text:
-    with st.spinner('Analizando texto...'):
-        try:
-            results = detect_subjunctive(text)
-            st.session_state.results = results
-            st.session_state.text_input = text
+# Botón para analizar
+if st.button("🔍 Analizar Subjuntivo con NLTK", type="primary"):
+    if not texto.strip():
+        st.warning("Por favor, introduce un texto para analizar.")
+    else:
+        with st.spinner("Analizando texto con NLTK..."):
+            resultados = analizar_con_nltk(texto)
+        
+        if resultados:
+            st.success(f"✅ Se encontraron {len(resultados)} verbos en subjuntivo")
             
-            # Mostrar resultados
-            summary = results['summary']
-            total = summary['total_verbs']
+            # Mostrar resultados en tabla
+            st.subheader("📋 Resultados del Análisis con NLTK")
+            df = pd.DataFrame(resultados)
+            st.dataframe(df, use_container_width=True)
             
-            if total == 0:
-                st.success("✅ No se encontraron verbos en subjuntivo en el texto.")
-            else:
-                st.success(f"✅ Se encontraron **{total}** verbos en subjuntivo")
+            # Crear columnas para los botones de descarga
+            col_download1, col_download2 = st.columns(2)
+            
+            with col_download1:
+                # Generar y descargar Excel
+                excel_file = crear_excel(resultados)
                 
-                # Gráficos
-                col1, col2 = st.columns(2)
+                st.download_button(
+                    label="📥 Descargar Informe Excel",
+                    data=excel_file,
+                    file_name="analisis_subjuntivo_nltk.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            
+            with col_download2:
+                # Generar y descargar CSV
+                csv_file = crear_csv(resultados)
                 
-                with col1:
-                    # Distribución por tiempo verbal
-                    tense_data = pd.DataFrame(list(summary['tenses'].items()), 
-                                            columns=['Tiempo', 'Cantidad'])
-                    fig_tense = px.bar(tense_data, x='Tiempo', y='Cantidad', 
-                                     title='Distribución por Tiempo Verbal',
-                                     color='Cantidad', color_continuous_scale='Blues')
-                    st.plotly_chart(fig_tense, use_container_width=True)
+                st.download_button(
+                    label="📄 Descargar Informe CSV",
+                    data=csv_file,
+                    file_name="analisis_subjuntivo_nltk.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            
+            # Mostrar estadísticas
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total subjuntivos", len(resultados))
+            with col2:
+                tiempos = df['Tiempo'].value_counts()
+                st.metric("Tiempo más común", tiempos.index[0] if len(tiempos) > 0 else "N/A")
+            with col3:
+                st.metric("Verbos únicos", df['Lema'].nunique())
+            
+            # Mostrar información sobre etiquetas POS
+            with st.expander("📊 Distribución de etiquetas POS"):
+                distribucion = df['Etiqueta'].value_counts()
+                st.bar_chart(distribucion)
                 
-                with col2:
-                    # Verbos más comunes
-                    verb_data = pd.DataFrame(summary['most_common'], 
-                                           columns=['Verbo', 'Frecuencia'])
-                    fig_verb = px.bar(verb_data, x='Verbo', y='Frecuencia', 
-                                    title='Verbos más frecuentes',
-                                    color='Frecuencia', color_continuous_scale='Reds')
-                    st.plotly_chart(fig_verb, use_container_width=True)
-                
-                # Tabla de resultados
-                st.markdown("### 📋 Detalle de verbos encontrados")
-                df = pd.DataFrame(results['subjunctive_verbs'])
-                df = df[['verbo', 'tiempo', 'persona', 'numero', 'oracion']]
-                df.columns = ['Verbo', 'Tiempo', 'Persona', 'Número', 'Oración']
-                
-                # Formatear la tabla
-                def highlight_verbs(val):
-                    return 'background-color: #d4edda; color: #155724; font-weight: bold'
-                
-                styled_df = df.style.applymap(highlight_verbs, subset=['Verbo'])
-                st.dataframe(styled_df, use_container_width=True, height=400)
-                
-                # Contexto detallado
-                st.markdown("### 🔍 Contexto detallado")
-                for i, verb in enumerate(results['subjunctive_verbs'], 1):
-                    with st.expander(f"**{i}. {verb['verbo']}** ({verb['tiempo']})"):
-                        st.markdown(f"""
-                        - **Forma:** {verb['forma']}
-                        - **Persona:** {verb['persona']}
-                        - **Número:** {verb['numero']}
-                        - **Oración:** *"{verb['oracion']}"*
-                        """)
-                        
-        except Exception as e:
-            st.error(f"❌ Error en el análisis: {str(e)}")
-            st.info("Por favor, intenta con un texto diferente o más corto.")
+        else:
+            st.info("ℹ️ No se encontraron verbos en modo subjuntivo en el texto.")
+
+# Ejemplos predefinidos
+st.subheader("💡 Ejemplos para probar")
+ejemplos = {
+    "Ejemplo 1": "Es importante que estudies para el examen. Ojalá que tengas buena suerte.",
+    "Ejemplo 2": "Quiero que vengas a la fiesta. Dudo que ella pueda asistir.",
+    "Ejemplo 3": "Sería bueno que lloviera pronto. Temo que se sequen las plantas."
+}
+
+cols = st.columns(3)
+for i, (nombre, ejemplo) in enumerate(ejemplos.items()):
+    with cols[i]:
+        if st.button(f"📌 {nombre}"):
+            texto = ejemplo
+            st.rerun()
 
 # Información adicional
-st.markdown("---")
-st.markdown("### 📝 Notas sobre el análisis")
-st.info("""
-- La aplicación detecta formas regulares e irregulares de subjuntivo
-- Considera contextos que suelen introducir subjuntivo (ojalá, espero que, etc.)
-- Puede haber falsos positivos en formas verbales ambiguas
-- Para mejores resultados, utiliza textos completos con contexto
-""")
+with st.expander("📚 Acerca del análisis con NLTK"):
+    st.markdown("""
+    Esta aplicación utiliza el **Natural Language Toolkit (NLTK)** para:
+    
+    - **Tokenización**: Dividir el texto en palabras y oraciones
+    - **Etiquetado POS**: Identificar las categorías gramaticales de cada palabra
+    - **Stemming**: Reducir palabras a su raíz o lema
+    
+    **Ventajas de usar NLTK:**
+    - Análisis lingüístico más preciso
+    - Identificación de estructuras gramaticales
+    - Detección de relaciones entre palabras
+    
+    **Limitaciones:**
+    - El corpus en español de NLTK es más limitado que el de inglés
+    - Algunos verbos irregulares pueden no detectarse correctamente
+    """)
 
-st.markdown("### 📚 Recursos útiles")
-st.markdown("""
-- [Gramática del subjuntivo en español](https://www.rae.es)
-- [Ejercicios de subjuntivo](https://www.studyspanish.com)
-- [Conjugador de verbos](https://www.spanishdict.com)
-""")
+# Pie de página
+st.markdown("---")
+st.caption("Analizador de Modo Subjuntivo con NLTK v2.0 | Desarrollado con Streamlit y NLTK")
