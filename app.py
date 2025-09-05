@@ -7,18 +7,32 @@ from nltk.tag import pos_tag
 from collections import defaultdict
 import plotly.express as px
 
-# Descargar recursos NLTK (solo una vez)
+# 👇 SOLUCIÓN PARA EL ERROR punkt_tab (Descarga automática de recursos)
 @st.cache_resource
-def download_nltk():
+def download_nltk_resources():
+    """Descarga todos los recursos NLTK necesarios para el español"""
+    resources = {
+        'tokenizers/punkt': 'punkt',
+        'tokenizers/punkt_tab': 'punkt_tab',  # Recurso faltante
+        'taggers/averaged_perceptron_tagger': 'averaged_perceptron_tagger'
+    }
+    
+    for path, package in resources.items():
+        try:
+            nltk.data.find(path)
+        except LookupError:
+            nltk.download(package, quiet=True)
+    
+    # Recursos específicos para español
     try:
-        nltk.data.find('tokenizers/punkt')
-        nltk.data.find('taggers/averaged_perceptron_tagger')
+        nltk.data.find('tokenizers/punkt/spanish.pickle')
     except LookupError:
         nltk.download('punkt', quiet=True)
-        nltk.download('averaged_perceptron_tagger', quiet=True)
+    
     return True
 
-download_nltk()
+# Ejecutar la descarga al inicio
+download_nltk_resources()
 
 # Diccionario base de formas subjuntivas comunes
 subjunctive_forms = {
@@ -42,6 +56,7 @@ subjunctive_triggers = [
 ]
 
 def detect_subjunctive(text):
+    """Detecta verbos en subjuntivo en un texto en español"""
     text = text.lower()
     sentences = sent_tokenize(text, language='spanish')
     
@@ -78,6 +93,7 @@ def detect_subjunctive(text):
     return results
 
 def analyze_verb(verb, sentence, trigger_found):
+    """Analiza un verbo individual para determinar si está en subjuntivo"""
     analysis = {
         'is_subjunctive': False,
         'form': None,
@@ -86,7 +102,7 @@ def analyze_verb(verb, sentence, trigger_found):
         'number': None
     }
     
-    # Verificación directa
+    # 1. Verificación directa con patrones
     for tense, forms in subjunctive_forms.items():
         if tense == 'presente':
             for ending, patterns in forms.items():
@@ -118,14 +134,18 @@ def analyze_verb(verb, sentence, trigger_found):
                     analysis['number'] = 'singular'
                     return analysis
     
-    # Heurísticas contextuales
+    # 2. Heurísticas contextuales (si hay un trigger de subjuntivo)
     if trigger_found:
         subjunctive_endings = [
-            r'r[aeí]a\w*', r'r[aeí]e\w*', r'rí\w*', r'ría\w*'
+            r'r[aeí]a\w*',  # -ra, -re, -ría
+            r'r[aeí]e\w*',  # -se, -re, -ríe
+            r'rí\w*',      # -rí, -rías, etc.
+            r'ría\w*'      # -ría, -rías, etc.
         ]
         
         for ending in subjunctive_endings:
             if re.search(ending, verb):
+                # Verificar que no sea un verbo impersonal o con sentido diferente
                 if not re.match(r'.*ría$', verb) or 'querría' not in sentence:
                     analysis['is_subjunctive'] = True
                     analysis['tense'] = 'presente' if 'ría' in verb else 'imperfecto'
@@ -137,6 +157,7 @@ def analyze_verb(verb, sentence, trigger_found):
     return analysis
 
 def get_person(verb, tense):
+    """Determina la persona gramatical del verbo"""
     if tense == 'presente':
         if verb.endswith(('e', 'es', 'é', 'és')):
             return '3a' if verb.endswith('e') else '2a'
@@ -154,6 +175,7 @@ def get_person(verb, tense):
     return 'indeterminada'
 
 def get_number(verb, tense):
+    """Determina el número (singular/plural) del verbo"""
     if tense == 'presente':
         if verb.endswith(('e', 'a', 'é', 'á')):
             return 'singular'
@@ -167,12 +189,14 @@ def get_number(verb, tense):
     return 'singular'
 
 def generate_summary(results):
+    """Genera un resumen de los hallazgos"""
     summary = {
         'total_verbs': len(results['subjunctive_verbs']),
         'tenses': {},
         'most_common': []
     }
     
+    # Contar por tiempos verbales
     tense_count = defaultdict(int)
     for verb in results['subjunctive_verbs']:
         tense = verb['tiempo']
@@ -181,6 +205,7 @@ def generate_summary(results):
     for tense, count in tense_count.items():
         summary['tenses'][tense] = count
     
+    # Verbos más comunes
     verb_freq = defaultdict(int)
     for verb in results['subjunctive_verbs']:
         verb_freq[verb['verbo']] += 1
@@ -189,7 +214,10 @@ def generate_summary(results):
     
     return summary
 
-# Interfaz Streamlit
+# ———————————————————————————————————————
+# INTERFAZ DE USUARIO STREAMLIT
+# ———————————————————————————————————————
+
 st.set_page_config(
     page_title="Detector de Subjuntivo",
     page_icon="🔍",
@@ -200,6 +228,7 @@ st.set_page_config(
 st.title("🔍 Detector de Subjuntivo en Español")
 st.markdown("**Analiza automáticamente verbos en modo subjuntivo en textos en español**")
 
+# SIDEBAR
 with st.sidebar:
     st.header("Acerca de")
     st.markdown("""
@@ -218,8 +247,21 @@ with st.sidebar:
     example_text = "Ojalá llueva mañana. Espero que tengas un buen día. Aunque esté cansado, iré al trabajo. No creo que haya suficiente tiempo para terminar."
     if st.button("Cargar ejemplo"):
         st.session_state.text_input = example_text
+    
+    # Botón de reinicio de recursos (opcional)
+    st.markdown("---")
+    if st.button("🔄 Reiniciar recursos de idioma"):
+        with st.spinner("Reinstalando recursos NLTK..."):
+            try:
+                nltk.download('punkt', quiet=False)
+                nltk.download('punkt_tab', quiet=False)
+                nltk.download('averaged_perceptron_tagger', quiet=False)
+                st.session_state.clear()
+                st.success("Recursos reinstalados. Recarga la página.")
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
 
-# Área principal
+# ÁREA PRINCIPAL
 col1, col2 = st.columns([2, 1])
 
 with col1:
@@ -250,7 +292,7 @@ with col2:
     else:
         st.info("El análisis aparecerá aquí")
 
-# Procesamiento
+# PROCESAMIENTO DEL TEXTO
 if analyze_button and text:
     with st.spinner('Analizando texto...'):
         try:
