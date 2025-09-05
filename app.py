@@ -58,7 +58,13 @@ subjunctive_triggers = [
 def detect_subjunctive(text):
     """Detecta verbos en subjuntivo en un texto en español"""
     text = text.lower()
-    sentences = sent_tokenize(text, language='spanish')
+    
+    # Tokenización con manejo de errores
+    try:
+        sentences = sent_tokenize(text, language='spanish')
+    except:
+        # Fallback: usar tokenización genérica si falla la del español
+        sentences = sent_tokenize(text)
     
     results = {
         'subjunctive_verbs': [],
@@ -67,8 +73,16 @@ def detect_subjunctive(text):
     }
     
     for sent in sentences:
-        tokens = word_tokenize(sent, language='spanish')
-        pos_tags = pos_tag(tokens)
+        try:
+            tokens = word_tokenize(sent, language='spanish')
+            pos_tags = pos_tag(tokens)  # Usa el tagger en inglés (requiere _eng)
+        except:
+            # Fallback si falla la tokenización
+            tokens = word_tokenize(sent)
+            pos_tags = pos_tag(tokens)
+        
+        # ... (resto de la función permanece igual)
+
         
         trigger_found = any(trigger in sent for trigger in subjunctive_triggers)
         
